@@ -111,17 +111,27 @@ func (r *NodePoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) (r
 		// Handle deletion
 		r.Logger.InfoContext(ctx, "Nodepool is being deleted")
 		if controllerutil.ContainsFinalizer(nodepool, utils.NodepoolFinalizer) {
-			if err := r.HwMgrAdaptor.HandleNodePoolDeletion(ctx, nodepool); err != nil {
+			completed, deleteErr := r.HwMgrAdaptor.HandleNodePoolDeletion(ctx, nodepool)
+			if deleteErr != nil {
 				// Log the failure and continue, to remove the finalizer and allow the deletion
-				r.Logger.InfoContext(ctx, "Failed HandleNodePoolDeletion", slog.String("error", err.Error()))
+				r.Logger.InfoContext(ctx, "Failed HandleNodePoolDeletion", slog.String("error", deleteErr.Error()))
+				return utils.RequeueWithShortInterval(), fmt.Errorf("failed HandleNodePoolDeletion: %w", deleteErr)
 			}
 
-			if err := utils.NodepoolRemoveFinalizer(ctx, r.Client, nodepool); err != nil {
-				return utils.RequeueImmediately(), fmt.Errorf("failed to remove finalizer from nodepool: %w", err)
+			if !completed {
+				r.Logger.InfoContext(ctx, "Deletion handling in progress, requeueing")
+				return utils.RequeueWithShortInterval(), nil
 			}
 
+			if finalizerErr := utils.NodepoolRemoveFinalizer(ctx, r.Client, nodepool); finalizerErr != nil {
+				return utils.RequeueWithShortInterval(), fmt.Errorf("failed to remove finalizer from nodepool: %w", finalizerErr)
+			}
+
+			r.Logger.InfoContext(ctx, "Deletion handling complete, finalizer removed")
 			return utils.DoNotRequeue(), nil
 		}
+
+		r.Logger.InfoContext(ctx, "No finalizer, deletion handling complete")
 		return utils.DoNotRequeue(), nil
 	}
 
